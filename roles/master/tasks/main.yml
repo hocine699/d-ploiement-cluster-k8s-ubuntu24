@@ -1,0 +1,200 @@
+---
+- name: "Configuration des serveurs DNS (Google/Cloudflare) via systemd-resolved"
+  become: true
+  command: resolvectl dns eth0 8.8.8.8 1.1.1.1
+  changed_when: false
+  ignore_errors: true
+  tags:
+    - dns
+
+- name: "Configuration du nœud master"
+  block:
+    - name: "Vérification si le cluster est déjà initialisé"
+      stat:
+        path: /etc/kubernetes/admin.conf
+      register: kubeconfig_stat
+
+    - name: "Vérification préalable des ports"
+      shell: |
+        echo "Vérification des ports critiques..."
+        netstat -tulpn | grep :6443 && echo "Port 6443 occupé!" || echo "Port 6443 libre"
+        netstat -tulpn | grep :2379 && echo "Port 2379 occupé!" || echo "Port 2379 libre"
+        ps aux | grep -E '[k]ube|[e]tcd' | wc -l | xargs echo "Processus kube actifs:"
+      register: port_check
+      when: not kubeconfig_stat.stat.exists
+
+    - name: "Affichage de l'état des ports"
+      debug:
+        var: port_check.stdout_lines
+      when: port_check is defined
+
+    - name: "Initialisation du cluster Kubernetes"
+      shell: |
+        kubeadm init \
+          --pod-network-cidr={{ pod_network_cidr }} \
+          --service-cidr={{ service_network_cidr }} \
+          --apiserver-advertise-address={{ ansible_default_ipv4.address }} \
+          --node-name={{ inventory_hostname }} \
+          --ignore-preflight-errors=Port-6443,Port-2379,Port-2380,Port-10250
+      register: kubeadm_init
+      when: not kubeconfig_stat.stat.exists
+
+    - name: "Affichage de la sortie de kubeadm init"
+      debug:
+        var: kubeadm_init.stdout_lines
+      when: kubeadm_init is defined and kubeadm_init.changed
+
+    - name: "Création du répertoire .kube pour l'utilisateur hocine"
+      file:
+        path: /home/hocine/.kube
+        state: directory
+        owner: hocine
+        group: hocine
+        mode: '0755'
+
+    - name: "Copie du fichier de configuration kubectl"
+      copy:
+        src: /etc/kubernetes/admin.conf
+        dest: /home/hocine/.kube/config
+        owner: hocine
+        group: hocine
+        mode: '0644'
+        remote_src: true
+
+    - name: "Création du répertoire .kube pour root"
+      file:
+        path: /root/.kube
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: "Copie du fichier de configuration kubectl pour root"
+      copy:
+        src: /etc/kubernetes/admin.conf
+        dest: /root/.kube/config
+        owner: root
+        group: root
+        mode: '0644'
+        remote_src: true
+
+    - name: "Vérification de l'installation de Flannel"
+      shell: kubectl get daemonset -n kube-flannel kube-flannel-ds
+      environment:
+        KUBECONFIG: /etc/kubernetes/admin.conf
+      register: flannel_check
+      failed_when: false
+
+    - name: "Installation du plugin réseau Flannel"
+      shell: |
+        kubectl apply -f https://github.com/flannel-io/flannel/releases/latest/download/kube-flannel.yml
+        sleep 10
+        kubectl rollout status daemonset/kube-flannel-ds -n kube-flannel --timeout=300s
+      environment:
+        KUBECONFIG: /etc/kubernetes/admin.conf
+      when: flannel_check.rc != 0
+      retries: 3
+      delay: 10
+
+    - name: "Génération de la commande de jointure pour les workers"
+      command: kubeadm token create --print-join-command
+      register: join_command
+      when: not kubeconfig_stat.stat.exists
+
+    - name: "Débogage - État de join_command"
+      debug:
+        var: join_command
+      when: not kubeconfig_stat.stat.exists
+
+    - name: "Sauvegarde de la commande de jointure"
+      set_fact:
+        kubernetes_join_command: "{{ join_command.stdout }}"
+      when: 
+        - join_command is defined 
+        - join_command.stdout is defined
+        - join_command.rc == 0
+
+    - name: "Attente que le nœud master soit prêt"
+      shell: kubectl get nodes --no-headers | grep -v NotReady | wc -l
+      environment:
+        KUBECONFIG: /etc/kubernetes/admin.conf
+      register: ready_nodes
+      until: ready_nodes.stdout|int >= 1
+      retries: 20
+      delay: 15
+      when: not kubeconfig_stat.stat.exists
+
+    - name: "Déploiement du Kubernetes Dashboard"
+      shell: kubectl apply -f https://raw.githubusercontent.com/kubernetes/dashboard/v2.7.0/aio/deploy/recommended.yaml
+      environment:
+        KUBECONFIG: /etc/kubernetes/admin.conf
+      when: not kubeconfig_stat.stat.exists
+
+    - name: "Configuration du service Dashboard en NodePort"
+      shell: kubectl patch svc kubernetes-dashboard -n kubernetes-dashboard -p '{"spec":{"type":"NodePort","ports":[{"port":443,"targetPort":8443,"nodePort":30443}]}}'
+      environment:
+        KUBECONFIG: /etc/kubernetes/admin.conf
+      when: not kubeconfig_stat.stat.exists
+
+    - name: "Suppression du taint sur master pour permettre scheduling pods"
+      shell: kubectl taint nodes --all node-role.kubernetes.io/control-plane- || true
+      environment:
+        KUBECONFIG: /etc/kubernetes/admin.conf
+      when: not kubeconfig_stat.stat.exists
+
+    - name: "Création de l'utilisateur admin pour le dashboard"
+      copy:
+        dest: /tmp/dashboard-admin.yaml
+        content: |
+          apiVersion: v1
+          kind: ServiceAccount
+          metadata:
+            name: admin-user
+            namespace: kubernetes-dashboard
+          ---
+          apiVersion: rbac.authorization.k8s.io/v1
+          kind: ClusterRoleBinding
+          metadata:
+            name: admin-user
+          roleRef:
+            apiGroup: rbac.authorization.k8s.io
+            kind: ClusterRole
+            name: cluster-admin
+          subjects:
+          - kind: ServiceAccount
+            name: admin-user
+            namespace: kubernetes-dashboard
+          ---
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: admin-user
+            namespace: kubernetes-dashboard
+            annotations:
+              kubernetes.io/service-account.name: "admin-user"   
+          type: kubernetes.io/service-account-token
+      when: not kubeconfig_stat.stat.exists
+
+    - name: "Application de la configuration admin dashboard"
+      shell: kubectl apply -f /tmp/dashboard-admin.yaml
+      environment:
+        KUBECONFIG: /etc/kubernetes/admin.conf
+      when: not kubeconfig_stat.stat.exists
+
+    - name: "Vérification du déploiement du dashboard (non-bloquant)"
+      shell: kubectl get pods -n kubernetes-dashboard --no-headers | grep Running | wc -l
+      environment:
+        KUBECONFIG: /etc/kubernetes/admin.conf
+      register: dashboard_pods
+      until: dashboard_pods.stdout|int >= 2
+      retries: 5
+      delay: 10
+      when: not kubeconfig_stat.stat.exists
+      failed_when: false
+
+    - name: "Info - État du dashboard"
+      debug:
+        msg: |
+          Pods Dashboard Running: {{ dashboard_pods.stdout if dashboard_pods is defined else 'Non vérifié' }}
+          Note: Le dashboard peut prendre plus de temps à démarrer, surtout si les workers ne sont pas encore joints.
+      when: not kubeconfig_stat.stat.exists

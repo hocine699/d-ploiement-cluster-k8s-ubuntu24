@@ -1,0 +1,82 @@
+---
+- name: "Installation des composants Kubernetes"
+  tags: kubernetes
+  block:
+    - name: "Nettoyage complet et forcé des configurations Kubernetes"
+      shell: |
+        # Nettoyage radical avec force
+        sudo rm -rf /etc/apt/sources.list.d/kubernetes*
+        sudo rm -rf /etc/apt/keyrings/kubernetes*
+        sudo rm -rf /etc/apt/trusted.gpg.d/kubernetes*
+        sudo rm -rf /usr/share/keyrings/kubernetes*
+        
+        # Nettoyage cache APT
+        sudo apt-get clean
+        sudo rm -rf /var/lib/apt/lists/*
+        
+        # Réinitialisation complète
+        sudo apt-get update || true
+        
+        echo "Nettoyage complet terminé"
+      ignore_errors: true
+
+    - name: "Création du répertoire keyrings"
+      file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: '0755'
+
+    - name: "Téléchargement et installation de la clé GPG Kubernetes"
+      shell: |
+        # Méthode alternative plus robuste
+        mkdir -p /etc/apt/keyrings
+        
+        # Téléchargement avec retry et timeout
+        for i in {1..3}; do
+          if curl -fsSL --connect-timeout 30 --max-time 60 \
+             "https://pkgs.k8s.io/core:/stable:/{{ k8s_pkgs_version }}/deb/Release.key" \
+             | gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg; then
+            chmod 644 /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+            echo "Clé GPG installée avec succès"
+            break
+          else
+            echo "Tentative $i échouée, retry..."
+            sleep 10
+          fi
+        done
+
+    - name: "Ajout du dépôt Kubernetes (méthode directe)"
+      shell: |
+        cat > /etc/apt/sources.list.d/kubernetes.list <<'EOF'
+        deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/{{ k8s_pkgs_version }}/deb/ /
+        EOF
+        chmod 644 /etc/apt/sources.list.d/kubernetes.list
+        echo "Dépôt Kubernetes ajouté"
+
+    - name: "Mise à jour du cache APT"
+      apt:
+        update_cache: true
+
+    - name: "Installation de kubelet, kubeadm et kubectl"
+      apt:
+        name:
+          - kubelet
+          - kubeadm  
+          - kubectl
+        state: present
+        update_cache: true
+
+    - name: "Verrouillage des versions Kubernetes"
+      dpkg_selections:
+        name: "{{ item }}"
+        selection: hold
+      loop:
+        - kubelet
+        - kubeadm
+        - kubectl
+
+    - name: "Activation et démarrage de kubelet"
+      systemd:
+        name: kubelet
+        enabled: true
+        state: started

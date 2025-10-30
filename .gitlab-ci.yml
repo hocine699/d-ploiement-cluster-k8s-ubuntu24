@@ -1,0 +1,297 @@
+# ============================================================
+# 🚀 Pipeline GitLab CI/CD : Déploiement complet d’un cluster K8s
+# Auteur : Hocine 
+# Objectif : Automatiser le déploiement K8s (Master + 2 Workers)
+# ============================================================
+
+stages:
+  - Nettoyage
+  - Validation
+  - Préparation
+  - Déploiement-cluster
+  - Vérification
+  - Déploiement-app
+  - Maintenance
+
+# ============================================================
+# 🌍 Variables globales
+# ============================================================
+
+variables:
+  ANSIBLE_FORCE_COLOR: "True"
+  ANSIBLE_STDOUT_CALLBACK: "yaml"
+  ANSIBLE_HOST_KEY_CHECKING: "False"
+
+# ============================================================
+# ⚙️ Template de base pour tous les jobs Ansible
+# ============================================================
+
+.ansible_job: &ansible_job
+  image: mon-runner-devops:latest
+  tags:
+    - synology
+  before_script:
+    # 🔹 Copier le repo dans un dossier sûr pour éviter les problèmes de permissions
+      - mkdir -p /tmp/ansible-safe
+      - cp -r "${CI_PROJECT_DIR}"/* /tmp/ansible-safe/
+      - cd /tmp/ansible-safe
+
+      # 🔹 Copier et vérifier les variables de groupe pour Ansible
+      - mkdir -p /tmp/ansible-safe/inventory/group_vars
+      - cp -r "${CI_PROJECT_DIR}"/group_vars/* /tmp/ansible-safe/inventory/group_vars/ || true
+      - echo "---- /tmp/ansible-safe/group_vars ----"
+      - ls -l /tmp/ansible-safe/group_vars/ || true
+      - echo "---- /tmp/ansible-safe/inventory/group_vars ----"
+      - ls -l /tmp/ansible-safe/inventory/group_vars/ || true
+      - echo "---- head of all.yml (if present) ----"
+      - if [ -f /tmp/ansible-safe/inventory/group_vars/all.yml ]; then sed -n '1,120p' /tmp/ansible-safe/inventory/group_vars/all.yml; fi
+
+      # 🔹 Config SSH
+      - mkdir -p ~/.ssh
+      - echo "$SSH_PRIVATE_KEY" > ~/.ssh/id_rsa
+      - chmod 600 ~/.ssh/id_rsa
+      - ssh-keyscan -H "$K8S_MASTER_IP" >> ~/.ssh/known_hosts || true
+      - ssh-keyscan -H "$K8S_WORKER1_IP" >> ~/.ssh/known_hosts || true
+      - ssh-keyscan -H "$K8S_WORKER2_IP" >> ~/.ssh/known_hosts || true
+
+      # 🔹 Inventaire dynamique basé sur variables GitLab CI/CD (expand variables)
+      - |
+        cat > inventory/inventory.yml << EOF
+        all:
+          children:
+            masters:
+              hosts:
+                k8s-master-01:
+                  ansible_host: $K8S_MASTER_IP
+                  ansible_user: hocine
+                  ansible_ssh_private_key_file: ~/.ssh/id_rsa
+            workers:
+              hosts:
+                k8s-worker-01:
+                  ansible_host: $K8S_WORKER1_IP
+                  ansible_user: hocine
+                  ansible_ssh_private_key_file: ~/.ssh/id_rsa
+                k8s-worker-02:
+                  ansible_host: $K8S_WORKER2_IP
+                  ansible_user: hocine
+                  ansible_ssh_private_key_file: ~/.ssh/id_rsa
+          vars:
+            ansible_python_interpreter: /usr/bin/python3
+            ansible_ssh_common_args: '-o StrictHostKeyChecking=no'
+        EOF
+
+      # 🔹 Définir le fichier de config Ansible
+      - export ANSIBLE_CONFIG="/tmp/ansible-safe/ansible.cfg"
+
+      # 🔹 Diagnostic rapide
+      - ansible --version
+      - ansible-config dump | grep CONFIG_FILE || true
+
+# ============================================================
+# 🧹 Stage 1 : Nettoyage du cluster existant
+# ============================================================
+
+Cleanup_cluster:
+  stage: Nettoyage
+  <<: *ansible_job
+  script:
+    - echo "=== Nettoyage complet du cluster Kubernetes sur les VMs ==="
+    - ansible-playbook playbooks/cleanup-playbook.yml
+  allow_failure: true
+  only:
+    - infrastructure
+
+# ============================================================
+# ✅ Stage 2 : Validation (Syntaxe + Ping)
+# ============================================================
+
+Validation_syntaxe:
+  stage: Validation
+  <<: *ansible_job
+  script:
+    - echo "=== Vérification de la syntaxe des playbooks ==="
+    - ansible-playbook --syntax-check playbooks/site.yml
+    - ansible-lint playbooks/site.yml || true
+  only:
+    - infrastructure
+
+Validation_connexion:
+  stage: Validation
+  <<: *ansible_job
+  script:
+    - echo "=== Vérification de la connectivité SSH aux VMs ==="
+    - ansible all -m ping
+  only:
+    - infrastructure
+
+# ============================================================
+# 🧰 Stage 3 : Préparation de l’environnement
+# ============================================================
+
+Preparation_environment:
+  stage: Préparation
+  <<: *ansible_job
+  script:
+    - echo "=== Préparation de l’environnement des VMs ==="
+    - ansible all -m setup
+    - ansible all -m shell -a "uptime"
+  artifacts:
+    reports:
+      junit: test-results.xml
+    expire_in: 1 hour
+  only:
+    - infrastructure
+
+Fix_k8s_repo:
+  stage: Préparation
+  <<: *ansible_job
+  script:
+    - echo "=== Fix Kubernetes apt repo (official apt.kubernetes.io) ==="
+    - ansible-playbook playbooks/fix-k8s-repo.yml -v
+  only:
+    - infrastructure
+
+# ============================================================
+# 🚧 Stage 4 : Déploiement du cluster
+# ============================================================
+
+Deploy_common:
+  stage: Déploiement-cluster
+  <<: *ansible_job
+  script:
+    - echo "=== Configuration commune des nœuds ==="
+    - ansible-playbook playbooks/site.yml --tags common -v
+  only:
+    - infrastructure
+
+Deploy_containerd:
+  stage: Déploiement-cluster
+  <<: *ansible_job
+  script:
+    - echo "=== Installation de Containerd ==="
+    - ansible-playbook playbooks/site.yml --tags containerd -v
+  dependencies:
+    - Deploy_common
+  only:
+    - infrastructure
+
+Deploy_kubernetes:
+  stage: Déploiement-cluster
+  <<: *ansible_job
+  script:
+    - echo "=== Installation de Kubernetes (binaries + kubeadm) ==="
+    - ansible-playbook playbooks/site.yml --tags kubernetes -v
+  dependencies:
+    - Deploy_containerd
+  only:
+    - infrastructure
+
+Deploy_master:
+  stage: Déploiement-cluster
+  <<: *ansible_job
+  script:
+    - echo "=== Configuration du nœud master ==="
+    - ansible-playbook playbooks/site.yml --limit masters -v
+  dependencies:
+    - Deploy_kubernetes
+  artifacts:
+    paths:
+      - kubeconfig/
+      - dashboard-info/
+      - logs/
+    expire_in: 1 week
+  only:
+    - infrastructure
+
+Deploy_workers:
+  stage: Déploiement-cluster
+  <<: *ansible_job
+  script:
+    - echo "=== Configuration des nœuds workers ==="
+    - ansible-playbook playbooks/site.yml --limit workers -v
+  dependencies:
+    - Deploy_master
+  only:
+    - infrastructure
+
+# ============================================================
+# 🔍 Stage 5 : Vérification du cluster
+# ============================================================
+
+Verification_cluster:
+  stage: Vérification
+  <<: *ansible_job
+  script:
+    - echo "=== Vérification du cluster Kubernetes ==="
+    - mkdir -p ~/.kube
+    - scp -o StrictHostKeyChecking=no hocine@$K8S_MASTER_IP:~/.kube/config ~/.kube/config || echo "Pas de kubeconfig trouvée"
+    - kubectl get nodes -o wide
+    - kubectl get pods -A
+    - kubectl cluster-info
+    - |
+      echo "=== Test d’un déploiement simple (nginx-test) ==="
+      kubectl create deployment nginx-test --image=nginx:latest || true
+      kubectl expose deployment nginx-test --port=80 --type=NodePort || true
+      sleep 30
+      kubectl get pods -l app=nginx-test
+      kubectl delete deployment nginx-test || true
+      kubectl delete service nginx-test || true
+  dependencies:
+    - Deploy_workers
+  artifacts:
+    reports:
+      junit: cluster-test-results.xml
+    expire_in: 1 week
+  only:
+    - infrastructure
+
+# ============================================================
+# 📊 Stage 6 : Déploiement des applications (Dashboard + Monitoring)
+# ============================================================
+
+Deploy_dashboard:
+  stage: Déploiement-app
+  <<: *ansible_job
+  script:
+    - echo "=== Déploiement du Kubernetes Dashboard ==="
+    - mkdir -p ~/.kube
+    - scp -o StrictHostKeyChecking=no hocine@$K8S_MASTER_IP:~/.kube/config ~/.kube/config
+    - kubectl apply -f configs/k8s-dashboard.yaml
+    - sleep 60
+    - kubectl get pods -n kubernetes-dashboard
+    - kubectl get services -n kubernetes-dashboard
+    - |
+      echo "=== Récupération du token d’accès Dashboard ==="
+      TOKEN=$(kubectl -n kubernetes-dashboard get secret $(kubectl -n kubernetes-dashboard get sa admin-user -o jsonpath="{.secrets[0].name}") -o jsonpath="{.data.token}" | base64 -d)
+      echo "Dashboard URL: https://$K8S_MASTER_IP:30443"
+      echo "Token: $TOKEN"
+      echo "Dashboard accessible à: https://$K8S_MASTER_IP:30443" > dashboard-access.txt
+      echo "Token d’accès: $TOKEN" >> dashboard-access.txt
+  dependencies:
+    - Verification_cluster
+  artifacts:
+    paths:
+      - dashboard-access.txt
+    expire_in: 1 week
+  only:
+    - infrastructure
+
+Deploy_monitoring:
+  stage: Déploiement-app
+  <<: *ansible_job
+  script:
+    - echo "=== Déploiement du stack de monitoring (Prometheus + Grafana) ==="
+    - mkdir -p ~/.kube monitoring-config
+    - scp -o StrictHostKeyChecking=no hocine@$K8S_MASTER_IP:~/.kube/config ~/.kube/config
+    - kubectl apply -f configs/k8s-monitoring-stack.yaml
+    - sleep 60
+    - kubectl get pods -n kube-system | grep -E "prometheus|grafana|exporter" || true
+    - ansible-playbook playbooks/prometheus-alerts.yml
+  dependencies:
+    - Deploy_dashboard
+  artifacts:
+    paths:
+      - monitoring-config/
+    expire_in: 1 week
+  only:
+    - infrastructure

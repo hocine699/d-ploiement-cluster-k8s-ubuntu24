@@ -1,0 +1,64 @@
+- name: Install pkgs.k8s.io v1.31 key and repo
+  hosts: all
+  become: true
+  gather_facts: true
+  tasks:
+    - name: Ensure apt prerequisites
+      apt:
+        name:
+          - curl
+          - ca-certificates
+          - apt-transport-https
+          - gnupg
+        state: present
+        update_cache: yes
+
+    - name: Ensure /etc/apt/keyrings exists
+      file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: '0755'
+
+    - name: Install pkgs.k8s.io v1.31 GPG key
+      become: true
+      shell: |
+        if [ ! -f /etc/apt/keyrings/kubernetes-apt-keyring.gpg ]; then
+          curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.31/deb/Release.key | gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+          chmod 644 /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+        fi
+
+    - name: Write pkgs.k8s.io v1.31 sources list
+      copy:
+        dest: /etc/apt/sources.list.d/kubernetes.list
+        content: 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.31/deb/ /'
+        mode: '0644'
+
+    - name: Remove stale packages.cloud.google.com references (best-effort)
+      shell: |
+        for f in /etc/apt/sources.list /etc/apt/sources.list.d/*.list; do
+          if [ -f "$f" ]; then
+            sed -i 's|https://packages.cloud.google.com/apt|https://pkgs.k8s.io/|g' "$f" || true
+          fi
+        done
+
+    - name: Clean apt lists
+      file:
+        path: /var/lib/apt/lists
+        state: absent
+
+    - name: Ensure apt lists dir exists
+      file:
+        path: /var/lib/apt/lists
+        state: directory
+        mode: '0755'
+
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+      register: apt_update_result
+      failed_when: false
+
+    - name: Show apt update result on failure
+      debug:
+        var: apt_update_result
+      when: apt_update_result is failed

@@ -1,0 +1,147 @@
+# Règles d'alerte pour monitoring Kubernetes
+# À placer dans /etc/prometheus/alerts.yml
+
+groups:
+- name: kubernetes.rules
+  rules:
+  
+  # Alertes sur les nœuds
+  - alert: KubernetesNodeNotReady
+    expr: kube_node_status_condition{condition="Ready",status="true"} == 0
+    for: 5m
+    labels:
+      severity: critical
+      component: node
+    annotations:
+      summary: "Nœud Kubernetes non disponible"
+      description: "Le nœud {{ $labels.node }} n'est pas prêt depuis plus de 5 minutes"
+
+  - alert: KubernetesNodeHighCPU
+    expr: 100 - (avg by(instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 80
+    for: 10m
+    labels:
+      severity: warning
+      component: node
+    annotations:
+      summary: "CPU élevé sur nœud Kubernetes"
+      description: "Le nœud {{ $labels.instance }} a un usage CPU de {{ $value }}% depuis 10 minutes"
+
+  - alert: KubernetesNodeHighMemory
+    expr: (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100 > 85
+    for: 10m
+    labels:
+      severity: warning
+      component: node
+    annotations:
+      summary: "Mémoire élevée sur nœud Kubernetes"
+      description: "Le nœud {{ $labels.instance }} a un usage mémoire de {{ $value }}% depuis 10 minutes"
+
+  # Alertes sur les pods
+  - alert: KubernetesPodCrashLooping
+    expr: rate(kube_pod_container_status_restarts_total[15m]) > 0
+    for: 5m
+    labels:
+      severity: warning
+      component: pod
+    annotations:
+      summary: "Pod en crash loop"
+      description: "Le pod {{ $labels.pod }} dans le namespace {{ $labels.namespace }} redémarre fréquemment"
+
+  - alert: KubernetesPodNotReady
+    expr: kube_pod_status_ready{condition="true"} == 0
+    for: 10m
+    labels:
+      severity: warning
+      component: pod
+    annotations:
+      summary: "Pod non prêt"
+      description: "Le pod {{ $labels.pod }} dans le namespace {{ $labels.namespace }} n'est pas prêt depuis 10 minutes"
+
+  # Alertes sur les déploiements
+  - alert: KubernetesDeploymentReplicasMismatch
+    expr: kube_deployment_spec_replicas != kube_deployment_status_replicas_available
+    for: 10m
+    labels:
+      severity: warning
+      component: deployment
+    annotations:
+      summary: "Réplicas de déploiement incorrects"
+      description: "Le déploiement {{ $labels.deployment }} dans {{ $labels.namespace }} a {{ $value }} réplicas manquants"
+
+  # Alertes sur l'API Server
+  - alert: KubernetesAPIServerDown
+    expr: up{job="kubernetes-apiserver"} == 0
+    for: 5m
+    labels:
+      severity: critical
+      component: apiserver
+    annotations:
+      summary: "API Server Kubernetes indisponible"
+      description: "L'API Server Kubernetes n'est pas accessible depuis 5 minutes"
+
+  - alert: KubernetesAPIServerLatencyHigh
+    expr: histogram_quantile(0.99, rate(apiserver_request_duration_seconds_bucket[5m])) > 1
+    for: 10m
+    labels:
+      severity: warning
+      component: apiserver
+    annotations:
+      summary: "Latence élevée API Server"
+      description: "La latence du 99e percentile de l'API Server est de {{ $value }}s"
+
+  # Alertes sur les volumes
+  - alert: KubernetesPersistentVolumeFillingUp
+    expr: kubelet_volume_stats_available_bytes / kubelet_volume_stats_capacity_bytes * 100 < 10
+    for: 10m
+    labels:
+      severity: warning
+      component: storage
+    annotations:
+      summary: "Volume persistant bientôt plein"
+      description: "Le volume {{ $labels.persistentvolumeclaim }} dans {{ $labels.namespace }} n'a plus que {{ $value }}% d'espace libre"
+
+  # Alertes sur les services
+  - alert: KubernetesServiceDown
+    expr: up{job="kube-state-metrics"} == 0
+    for: 5m
+    labels:
+      severity: warning
+      component: monitoring
+    annotations:
+      summary: "Service kube-state-metrics indisponible"
+      description: "Le service kube-state-metrics n'est pas accessible pour la collecte de métriques"
+
+- name: infrastructure.rules
+  rules:
+  
+  # Alertes sur l'infrastructure
+  - alert: HighDiskUsage
+    expr: 100 - ((node_filesystem_avail_bytes{mountpoint="/"} * 100) / node_filesystem_size_bytes{mountpoint="/"}) > 85
+    for: 10m
+    labels:
+      severity: warning
+      component: disk
+    annotations:
+      summary: "Espace disque faible"
+      description: "L'espace disque sur {{ $labels.instance }} est à {{ $value }}%"
+
+  - alert: SystemLoadHigh
+    expr: node_load1 / on(instance) count by(instance)(node_cpu_seconds_total{mode="idle"}) > 2
+    for: 10m
+    labels:
+      severity: warning
+      component: system
+    annotations:
+      summary: "Charge système élevée"
+      description: "La charge système sur {{ $labels.instance }} est de {{ $value }}"
+
+  # Alerte sur la connectivité réseau
+  - alert: NodeExporterDown
+    expr: up{job="kubernetes-nodes"} == 0
+    for: 5m
+    labels:
+      severity: critical
+      component: monitoring
+    annotations:
+      summary: "Node Exporter indisponible"
+      description: "Node Exporter sur {{ $labels.instance }} n'est pas accessible depuis 5 minutes"

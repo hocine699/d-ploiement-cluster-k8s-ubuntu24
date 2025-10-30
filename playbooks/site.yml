@@ -1,0 +1,68 @@
+---
+- name: "Préparation de tous les nœuds"
+  hosts: all
+  become: true
+  gather_facts: true
+  
+  pre_tasks:
+    - name: "Mise à jour du cache APT"
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+
+  roles:
+    - common
+    - containerd
+    - kubernetes
+
+- name: "Initialisation du nœud master"
+  hosts: masters
+  become: true
+  roles:
+    - master
+
+- name: "Attente que le master soit complètement prêt"
+  hosts: masters
+  become: true
+  tasks:
+    - name: "Vérification que le master est Ready"
+      shell: kubectl get nodes --no-headers | grep "Ready"
+      environment:
+        KUBECONFIG: /etc/kubernetes/admin.conf
+      register: master_ready
+      until: master_ready.rc == 0
+      retries: 5
+      delay: 10
+      failed_when: false
+
+    - name: "Vérification que Flannel est opérationnel"
+      shell: kubectl get pods -n kube-flannel --no-headers | grep "Running" | wc -l
+      environment:
+        KUBECONFIG: /etc/kubernetes/admin.conf
+      register: flannel_running
+      until: flannel_running.stdout|int >= 1
+      retries: 5
+      delay: 10
+      failed_when: false
+
+    - name: "Affichage de l'état du master avant déploiement workers"
+      debug:
+        msg: |
+          Master Ready: {{ master_ready.rc == 0 }}
+          Flannel Pods Running: {{ flannel_running.stdout if flannel_running.stdout is defined else 'Unknown' }}
+          Prêt pour déploiement workers
+
+- name: "Déploiement des workers"
+  hosts: workers
+  become: true
+  roles:
+    - worker
+
+- import_playbook: post-install.yml
+
+- name: "Vérification finale du cluster"
+  hosts: all
+  become: true
+  roles:
+    - verification
+  run_once: true

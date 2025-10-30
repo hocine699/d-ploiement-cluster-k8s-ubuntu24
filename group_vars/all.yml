@@ -1,0 +1,62 @@
+# Variables pour le cluster Kubernetes
+kubernetes_version: "1.34.1"
+kubernetes_version_rhel_package: "1.34.1.*"
+# Suffixe utilisé pour les paquets Debian (kubelet/kubeadm/kubectl) — ex: '-00'
+kubernetes_package_suffix: "-00"
+
+# Variables supplémentaires pour la gestion fine des versions (optionnel)
+# - `kubernetes_version_full` : combinaison utile pour paquets / artefacts
+# - `kubernetes_version_series` : ex. "1.34" (utile pour construire URLs ou conditionnels)
+# - `kube_package_suffix` : alias pratique vers `kubernetes_package_suffix`
+# - `kubernetes_track_stable` : si true, indique qu'on suit la track stable (usage documentaire)
+kubernetes_version_full: "{{ kubernetes_version }}{{ kubernetes_package_suffix }}"
+kubernetes_version_series: "{{ kubernetes_version.split('.')[:2] | join('.') }}"
+kube_package_suffix: "{{ kubernetes_package_suffix }}"
+kubernetes_track_stable: true
+
+# Version du dépôt pkgs.k8s.io à utiliser (ex: v1.31)
+# Ce tag contrôle la clé et le chemin du dépôt écrit par les rôles/playbooks
+k8s_pkgs_version: "v1.31"
+
+# Configuration réseau
+pod_network_cidr: "10.244.0.0/16"
+service_network_cidr: "10.96.0.0/12"
+
+# CNI Plugin (Flannel)
+flannel_version: "v0.22.3"
+
+# Docker/Containerd
+containerd_version: "1.7.28-0ubuntu1~24.04.1"
+
+# Configuration du cluster
+cluster_name: "k8s-cluster"
+api_server_endpoint: "{{ hostvars[groups['masters'][0]]['ansible_host'] }}"
+api_server_port: 6443
+
+# Certificats
+cert_dir: "/etc/kubernetes/pki"
+kubeconfig_dir: "/etc/kubernetes"
+
+# Configuration système
+swap_disabled: true
+firewall_disabled: true
+
+# Packages à installer
+common_packages:
+  - apt-transport-https
+  - ca-certificates
+  - curl
+  - gnupg
+  - lsb-release
+  - software-properties-common
+
+# Configuration des modules kernel
+kernel_modules:
+  - br_netfilter
+  - overlay
+
+# Configuration sysctl
+sysctl_config:
+  net.bridge.bridge-nf-call-iptables: 1
+  net.bridge.bridge-nf-call-ip6tables: 1
+  net.ipv4.ip_forward: 1

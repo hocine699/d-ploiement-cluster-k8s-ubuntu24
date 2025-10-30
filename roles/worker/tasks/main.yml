@@ -1,0 +1,51 @@
+---
+- name: "Configuration des nœuds workers"
+  block:
+    - name: "Vérification si le nœud a déjà rejoint le cluster"
+      stat:
+        path: /etc/kubernetes/kubelet.conf
+      register: kubelet_conf_stat
+
+    - name: "Récupération de la commande de jointure depuis le master"
+      shell: kubeadm token create --print-join-command
+      register: join_command_result
+      delegate_to: "{{ groups['masters'][0] }}"
+      run_once: true
+      when: not kubelet_conf_stat.stat.exists
+
+    - name: "Partage de la commande de jointure avec tous les workers"
+      set_fact:
+        worker_join_command: "{{ join_command_result.stdout }}"
+      when: 
+        - not kubelet_conf_stat.stat.exists
+        - join_command_result is defined
+      delegate_to: "{{ item }}"
+      delegate_facts: true
+      with_items: "{{ groups['workers'] }}"
+      run_once: true
+
+    - name: "Jointure du nœud au cluster"
+      shell: "{{ worker_join_command }}"
+      when: 
+        - not kubelet_conf_stat.stat.exists
+        - worker_join_command is defined
+
+    - name: "Attente que kubelet démarre"
+      wait_for:
+        port: 10250
+        host: "{{ ansible_default_ipv4.address }}"
+        delay: 10
+        timeout: 60
+      when: not kubelet_conf_stat.stat.exists
+
+    - name: "Vérification du statut du nœud"
+      shell: systemctl is-active kubelet
+      register: kubelet_status
+      failed_when: false
+
+    - name: "Redémarrage de kubelet si nécessaire"
+      systemd:
+        name: kubelet
+        state: restarted
+        enabled: yes
+      when: kubelet_status.stdout != "active"

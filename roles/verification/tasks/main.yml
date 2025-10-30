@@ -1,0 +1,218 @@
+---
+- name: "Diagnostic initial - État des nœuds brut"
+  shell: kubectl get nodes -o wide
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+  register: nodes_raw
+  delegate_to: "{{ groups['masters'][0] }}"
+  ignore_errors: true
+
+- name: "Diagnostic initial - Pods système"
+  shell: kubectl get pods -n kube-system -o wide
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+  register: system_pods_raw
+  delegate_to: "{{ groups['masters'][0] }}"
+  ignore_errors: true
+
+- name: "Diagnostic initial - Logs kubelet master"
+  shell: journalctl -u kubelet --no-pager -l | tail -50
+  register: kubelet_logs
+  delegate_to: "{{ groups['masters'][0] }}"
+  ignore_errors: true
+
+- name: "Affichage diagnostic initial"
+  debug:
+    msg: |
+      === ÉTAT DES NŒUDS ===
+      {{ nodes_raw.stdout if nodes_raw.rc == 0 else 'Erreur kubectl nodes: ' + nodes_raw.stderr }}
+      
+      === PODS SYSTÈME ===
+      {{ system_pods_raw.stdout if system_pods_raw.rc == 0 else 'Erreur kubectl pods: ' + system_pods_raw.stderr }}
+      
+      === LOGS KUBELET (50 dernières lignes) ===
+      {{ kubelet_logs.stdout }}
+
+- name: "Vérification que les nœuds sont en cours de démarrage (attente réduite)"
+  shell: kubectl get nodes --no-headers | wc -l
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+  register: total_nodes
+  until: total_nodes.stdout|int >= groups['all']|length
+  retries: 10
+  delay: 15
+  delegate_to: "{{ groups['masters'][0] }}"
+  ignore_errors: true
+
+- name: "Vérification optionnelle - nœuds prêts"
+  shell: kubectl get nodes --no-headers | grep -v NotReady | wc -l
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+  register: ready_nodes
+  delegate_to: "{{ groups['masters'][0] }}"
+  ignore_errors: true
+
+- name: "Affichage de l'état des nœuds"
+  shell: kubectl get nodes -o wide
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+  register: nodes_status
+  delegate_to: "{{ groups['masters'][0] }}"
+  ignore_errors: true
+
+- name: "Résultat - État des nœuds"
+  debug:
+    msg: |
+      Total nœuds détectés: {{ total_nodes.stdout if total_nodes.rc == 0 else 'Erreur' }}
+      Nœuds prêts: {{ ready_nodes.stdout if ready_nodes.rc == 0 else 'Erreur' }}
+      Nœuds attendus: {{ groups['all']|length }}
+      
+      === DÉTAIL DES NŒUDS ===
+      {{ nodes_status.stdout if nodes_status.rc == 0 else 'Erreur kubectl: ' + nodes_status.stderr }}
+
+- name: "Vérification que les pods système sont en cours d'exécution"
+  shell: kubectl get pods -n kube-system -o wide
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+  register: system_pods
+  delegate_to: "{{ groups['masters'][0] }}"
+  ignore_errors: true
+
+- name: "Résultat - Pods système"
+  debug:
+    msg: |
+      === PODS SYSTÈME ===
+      {{ system_pods.stdout if system_pods.rc == 0 else 'Erreur kubectl: ' + system_pods.stderr }}
+
+- name: "Vérification des événements Kubernetes"
+  shell: kubectl get events --sort-by='.firstTimestamp' | tail -20
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+  register: k8s_events
+  delegate_to: "{{ groups['masters'][0] }}"
+  ignore_errors: true
+
+- name: "Résultat - Événements récents"
+  debug:
+    msg: |
+      === ÉVÉNEMENTS KUBERNETES (20 derniers) ===
+      {{ k8s_events.stdout if k8s_events.rc == 0 else 'Erreur kubectl: ' + k8s_events.stderr }}
+
+- name: "Vérification du dashboard Kubernetes"
+  shell: kubectl get pods -n kubernetes-dashboard -o wide
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+  register: dashboard_pods
+  delegate_to: "{{ groups['masters'][0] }}"
+  ignore_errors: true
+
+- name: "Résultat - État du dashboard"
+  debug:
+    msg: |
+      === DASHBOARD KUBERNETES ===
+      {{ dashboard_pods.stdout if dashboard_pods.rc == 0 else 'Dashboard non installé ou erreur: ' + dashboard_pods.stderr }}
+
+- name: "Récupération du token du dashboard"
+  shell: |
+    if kubectl get namespace kubernetes-dashboard 2>/dev/null; then
+      SECRET=$(kubectl get secrets -n kubernetes-dashboard | grep admin-user | awk '{print $1}' | head -1)
+      if [ ! -z "$SECRET" ]; then
+        kubectl describe secret $SECRET -n kubernetes-dashboard | grep token: | awk '{print $2}'
+      else
+        echo "Token not found - ServiceAccount may not be created yet"
+      fi
+    else
+      echo "Namespace kubernetes-dashboard not found"
+    fi
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+  register: dashboard_token
+  delegate_to: "{{ groups['masters'][0] }}"
+  ignore_errors: true
+
+- name: "Sauvegarde des logs de diagnostic"
+  shell: |
+    echo "=== DIAGNOSTIC COMPLET DU CLUSTER ===" > cluster-diagnostic.txt
+    echo "Date: $(date)" >> cluster-diagnostic.txt
+    echo "" >> cluster-diagnostic.txt
+    echo "=== NŒUDS ===" >> cluster-diagnostic.txt
+    kubectl get nodes -o wide >> cluster-diagnostic.txt 2>&1 || echo "Erreur kubectl nodes" >> cluster-diagnostic.txt
+    echo "" >> cluster-diagnostic.txt
+    echo "=== PODS SYSTÈME ===" >> cluster-diagnostic.txt
+    kubectl get pods -n kube-system -o wide >> cluster-diagnostic.txt 2>&1 || echo "Erreur kubectl pods" >> cluster-diagnostic.txt
+    echo "" >> cluster-diagnostic.txt
+    echo "=== ÉVÉNEMENTS ===" >> cluster-diagnostic.txt
+    kubectl get events --sort-by='.firstTimestamp' >> cluster-diagnostic.txt 2>&1 || echo "Erreur kubectl events" >> cluster-diagnostic.txt
+    echo "" >> cluster-diagnostic.txt
+    echo "=== LOGS KUBELET (100 dernières lignes) ===" >> cluster-diagnostic.txt
+    journalctl -u kubelet --no-pager -l | tail -100 >> cluster-diagnostic.txt 2>&1 || echo "Erreur journalctl" >> cluster-diagnostic.txt
+  delegate_to: "{{ groups['masters'][0] }}"
+  ignore_errors: true
+
+- name: "Sauvegarde du token dashboard (si disponible)"
+  copy:
+    content: "{{ dashboard_token.stdout }}"
+    dest: "dashboard-token.txt"
+  when: 
+    - dashboard_token.rc == 0 
+    - dashboard_token.stdout is defined
+    - dashboard_token.stdout != "Token not found - ServiceAccount may not be created yet"
+    - dashboard_token.stdout != "Namespace kubernetes-dashboard not found"
+  delegate_to: "{{ groups['masters'][0] }}"
+  ignore_errors: true
+
+- name: "Récupération des informations de connexion"
+  shell: |
+    echo "=== INFORMATIONS DU CLUSTER ===" > dashboard-info.txt
+    echo "Date de génération: $(date)" >> dashboard-info.txt
+    echo "Dashboard URL: https://{{ hostvars[groups['masters'][0]]['ansible_host'] }}:30443" >> dashboard-info.txt
+    echo "" >> dashboard-info.txt
+    if [ -f dashboard-token.txt ]; then
+      echo "Token admin:" >> dashboard-info.txt
+      cat dashboard-token.txt >> dashboard-info.txt
+    else
+      echo "Token admin: Non disponible (dashboard pas encore configuré)" >> dashboard-info.txt
+    fi
+    echo "" >> dashboard-info.txt
+    echo "=== RÉSUMÉ DES NŒUDS ===" >> dashboard-info.txt
+    kubectl get nodes -o wide >> dashboard-info.txt 2>&1 || echo "Cluster en cours de démarrage..." >> dashboard-info.txt
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+  delegate_to: "{{ groups['masters'][0] }}"
+  ignore_errors: true
+
+- name: "Vérification des plugins CNI sur tous les nœuds"
+  shell: ls -la /opt/cni/bin/ | head -10
+  register: cni_plugins_check
+  ignore_errors: true
+
+- name: "Résultat - Plugins CNI installés"
+  debug:
+    msg: |
+      === PLUGINS CNI SUR {{ inventory_hostname }} ===
+      {{ cni_plugins_check.stdout if cni_plugins_check.rc == 0 else 'Erreur: ' + cni_plugins_check.stderr }}
+
+- name: "Vérification spécifique du plugin loopback"
+  stat:
+    path: "/opt/cni/bin/loopback"
+  register: loopback_check
+
+- name: "Résultat - Plugin loopback (critique pour les pods)"
+  debug:
+    msg: |
+      Plugin loopback sur {{ inventory_hostname }}: {{ 'PRÉSENT' if loopback_check.stat.exists else 'MANQUANT - PROBLÈME CRITIQUE!' }}
+
+- name: "Diagnostic final - État des pods après installation CNI"
+  shell: kubectl get pods --all-namespaces -o wide
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+  register: final_pods_check
+  delegate_to: "{{ groups['masters'][0] }}"
+  ignore_errors: true
+
+- name: "Résultat final - Tous les pods"
+  debug:
+    msg: |
+      === ÉTAT FINAL DES PODS ===
+      {{ final_pods_check.stdout if final_pods_check.rc == 0 else 'Erreur kubectl: ' + final_pods_check.stderr }}
+  delegate_to: "{{ groups['masters'][0] }}"

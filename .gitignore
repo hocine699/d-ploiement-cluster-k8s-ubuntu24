@@ -1,0 +1,66 @@
+# .gitignore pour le projet Kubernetes
+
+# Fichiers de configuration locaux
+*.local
+.env
+.env.local
+
+# Fichiers temporaires Ansible
+*.retry
+.ansible/
+
+# Fichiers de logs
+*.log
+logs/
+
+# Fichiers de configuration SSH privés
+id_rsa
+id_ed25519
+*.pem
+*.key
+
+# Fichiers temporaires
+*.tmp
+*.temp
+.temp/
+
+# Fichiers de backup
+*.backup
+*.bak
+
+# Configurations spécifiques à l'environnement
+kubeconfig
+prometheus-k8s-token.txt
+dashboard-*.txt
+*-token.txt
+
+# Fichiers générés
+monitoring-config/
+dashboard-info/
+integration-summary.txt
+grafana-dashboards-info.txt
+
+# Cache et builds
+.cache/
+build/
+dist/
+
+# IDE et éditeurs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Terraform (si utilisé)
+*.tfstate
+*.tfstate.backup
+.terraform/
+
+# Vagrant (si utilisé)
+.vagrant/

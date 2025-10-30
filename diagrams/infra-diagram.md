@@ -8,23 +8,23 @@ Copiez le bloc ci‑dessous dans un fichier `.md` ou directement dans un README 
 flowchart LR
   subgraph NAS_GitLab [Synology NAS / GitLab]
     GL[GitLab CI]
-    ART[Artefacts\n(kubeconfig, dashboard token)]
+    ART["Artefacts<br>(kubeconfig, dashboard token)"]
     PROM_NAS[Prometheus / Grafana (NAS)]
   end
 
   subgraph CI_Runner [Runner / CI]
-    Runner[GitLab Runner\n(Ansible) ]
+    Runner["GitLab Runner<br>(Ansible)"]
   end
 
   subgraph Infra [Cluster Kubernetes (Ubuntu VMs)]
-    Master[Master VM\n(kube-apiserver, controller, scheduler) ]
-    Worker1[Worker VM 1\n(kubelet, kube-proxy) ]
-    Worker2[Worker VM 2\n(kubelet, kube-proxy) ]
+  Master["Master VM<br>(kube-apiserver, controller, scheduler)"]
+  Worker1["Worker VM 1<br>(kubelet, kube-proxy)"]
+  Worker2["Worker VM 2<br>(kubelet, kube-proxy)"]
 
     subgraph ClusterServices [Services déployés]
       Dash[Kubernetes Dashboard]
-      NodeExp[Node Exporter\n(DaemonSet)]
-      KubeState[kube-state-metrics\n(Deployment)]
+  NodeExp["Node Exporter<br>(DaemonSet)"]
+  KubeState["kube-state-metrics<br>(Deployment)"]
     end
   end
 

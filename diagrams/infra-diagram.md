@@ -70,9 +70,3 @@ Explication rapide :
 - kube-state-metrics expose les métriques Kubernetes que Prometheus collecte.
 - Prometheus/Grafana peut être hébergé soit sur le NAS (externe) soit dans le cluster (optionnel). Les deux options sont représentées.
 
-Si tu veux, je peux :
-- Intégrer ce diagramme directement dans le `README.md`.
-- Générer un PNG/SVG (nécessite outil local ou web, je peux fournir une commande/outil recommandé).
-- Faire une version simplifiée pour une slide LinkedIn (image optimisée).
-
-Indique ce que tu préfères et j’ajuste.  

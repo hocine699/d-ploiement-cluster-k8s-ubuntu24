@@ -6,22 +6,22 @@ Copiez le bloc ci‑dessous dans un fichier `.md` ou directement dans un README 
 
 ```mermaid
 flowchart LR
-  subgraph NAS_GitLab [Synology NAS / GitLab]
+  subgraph NAS_GitLab["Synology NAS / GitLab"]
     GL[GitLab CI]
     ART["Artefacts<br>(kubeconfig, dashboard token)"]
     PROM_NAS[Prometheus / Grafana (NAS)]
   end
 
-  subgraph CI_Runner [Runner / CI]
+  subgraph CI_Runner["Runner / CI"]
     Runner["GitLab Runner<br>(Ansible)"]
   end
 
-  subgraph Infra [Cluster Kubernetes (Ubuntu VMs)]
+  subgraph Infra["Cluster Kubernetes (Ubuntu VMs)"]
   Master["Master VM<br>(kube-apiserver, controller, scheduler)"]
   Worker1["Worker VM 1<br>(kubelet, kube-proxy)"]
   Worker2["Worker VM 2<br>(kubelet, kube-proxy)"]
 
-    subgraph ClusterServices [Services déployés]
+  subgraph ClusterServices["Services déployés"]
       Dash[Kubernetes Dashboard]
   NodeExp["Node Exporter<br>(DaemonSet)"]
   KubeState["kube-state-metrics<br>(Deployment)"]
@@ -45,9 +45,9 @@ flowchart LR
   GL -->|stocke artefacts| ART
 
   %% Option : Prometheus dans le cluster
-  subgraph OptionalClusterProm [Prometheus dans le cluster (optionnel)]
-    PROM_CLUSTER[Prometheus (Cluster)]
-    GRAF_CLUSTER[Grafana (Cluster)]
+  subgraph OptionalClusterProm["Prometheus dans le cluster (optionnel)"]
+    PROM_CLUSTER["Prometheus (Cluster)"]
+    GRAF_CLUSTER["Grafana (Cluster)"]
   end
 
   NodeExp -->|scrape| PROM_CLUSTER
